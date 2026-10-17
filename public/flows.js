@@ -111,7 +111,7 @@
   }
   el('flow-template').onchange = templateControls;
   async function loadExample(editShared) {
-    if (!base || !ready || busy || (config.nodes.length && !confirm('载入示例将替换当前编辑内容，是否继续？'))) return;
+    if ((!base && !editShared) || !ready || busy || (config.nodes.length && !confirm('载入示例将替换当前编辑内容，是否继续？'))) return;
     const version = ++loadVersion, selected = el('flow-template').value, loadBase = base;
     busy = true; templateControls();
     try {
@@ -130,7 +130,7 @@
   el('template-use').onclick = () => { void loadExample(false); };
   el('template-exit').onclick = () => { if (confirm('返回当前号码的已保存流程？未保存的示例修改将丢失。')) void load(); };
   async function saveTemplate(update) {
-    if (!base || !ready || busy) return status('正在处理，请等待完成后再保存');
+    if ((!base && !window.isSuperAdmin()) || !ready || busy) return status('正在处理，请等待完成后再保存');
     if (update && !editorTemplate) return status('请先载入要编辑的公共示例');
     const name = update ? el('template-name').value : prompt('新示例名称', '新示例');
     if (!name?.trim()) return status('请填写示例名称');
