@@ -378,7 +378,7 @@ async function changeUserPassword(reset) {
 $('password-form').onsubmit = event => { event.preventDefault(); void changeUserPassword(false); };
 $('password-reset').onclick = () => { void changeUserPassword(true); };
 $('nav-chat').onclick = () => showPage('chat');
-$('nav-flows').onclick = () => { if (!selectedAccount) return notice('请先选择可用号码，再配置自动回复'); showPage('flows'); };
+$('nav-flows').onclick = () => showPage('flows');
 $('nav-admin').onclick = () => showPage('admin');
 function localDate(iso) { const d = new Date(iso); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); }
 async function loadAdmin() {

@@ -242,6 +242,39 @@ test('six-character passwords, admin password changes/reset and isolated media u
   } finally { await service.stop(); await rm(dataDir, { recursive: true }); }
 });
 
+test('flow examples can be edited without an assigned number', { timeout: 30000 }, async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), 'blue-no-number-flows-'));
+  const service = await launch(dataDir);
+  try {
+    const anonymous = client(service.base), admin = client(service.base), user = client(service.base);
+    await admin.request('/api/auth/login', { method: 'POST', body: { username: 'test-admin', password: 'test-password-123' } });
+    const registered = await anonymous.request('/api/auth/register', { method: 'POST', body: credentials('no-number-user') });
+    await user.request('/api/auth/login', { method: 'POST', body: credentials('no-number-user') });
+    const templates = (await (await user.request('/api/templates')).json()).templates;
+    assert.ok(templates.length > 0);
+    const loaded = await user.request(`/api/templates/${templates[0].id}/load?details=1`, { method: 'POST' });
+    assert.equal(loaded.status, 200);
+    assert.equal((await loaded.json()).config.enabled, false);
+    assert.equal((await user.request('/api/admin/templates', { method: 'POST', body: { name: 'Denied', config: { nodes: [] } } })).status, 403);
+    assert.equal((await user.request('/api/admin/template-media', { method: 'POST', headers: { 'Content-Type': 'image/png' }, body: Buffer.from('invalid') })).status, 403);
+
+    const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jU1kAAAAASUVORK5CYII=', 'base64');
+    const uploaded = await admin.request('/api/admin/template-media', { method: 'POST', headers: { 'Content-Type': 'image/png' }, body: image });
+    assert.equal(uploaded.status, 200);
+    const asset = (await uploaded.json()).id;
+    assert.deepEqual(Buffer.from(await (await user.request(`/api/template-media/${asset}`)).arrayBuffer()), image);
+    const config = { enabled: true, mode: 'numbered', triggerMode: 'keywords', nodes: [{ id: 'start', name: 'Welcome', triggers: ['hello'], text: 'Hello', image: asset, options: [] }] };
+    const saved = await admin.request('/api/admin/templates', { method: 'POST', body: { id: templates[0].id, name: 'No-number example', revision: 1, config } });
+    assert.equal(saved.status, 200);
+    assert.equal((await saved.json()).revision, 2);
+    const reloaded = await (await user.request(`/api/templates/${templates[0].id}/load?details=1`, { method: 'POST' })).json();
+    assert.equal(reloaded.template.name, 'No-number example');
+    assert.equal(reloaded.config.nodes[0].image, asset);
+    assert.equal(reloaded.config.enabled, false);
+    assert.equal(registered.status, 201);
+  } finally { await service.stop(); await rm(dataDir, { recursive: true }); }
+});
+
 test('admin-managed numbers transfer without exposing messages to admin; custom quotas include legacy numbers', { timeout: 30000 }, async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), 'blue-assignments-')); let service = await launch(dataDir);
   try {

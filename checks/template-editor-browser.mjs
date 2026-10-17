@@ -47,6 +47,13 @@ try {
   }
   await login(admin, 'template-admin', 'admin-test-123');
   const adminId = (await request(admin, '/api/auth/me')).data.user.id;
+  await admin.click('#nav-flows');
+  await admin.waitForFunction(() => !document.getElementById('flow-example').disabled);
+  await admin.click('#flow-example');
+  await admin.waitForFunction(() => !document.getElementById('template-editor').hidden && !document.getElementById('flow-save').disabled);
+  await fill(admin, '#template-name', '示例1 · 无号码编辑');
+  await admin.click('#flow-save');
+  await admin.waitForFunction(() => document.getElementById('flow-notice').textContent.includes('已保存为 v2'));
   const adminAccount = legacyAccount(dir, adminId, 'Existing admin number');
   await openFlows(admin);
   await admin.click('#flow-example');
@@ -60,7 +67,7 @@ try {
   await (await admin.$('.flow-node input[type=file]')).uploadFile(imagePath);
   await admin.waitForFunction(() => document.querySelector('.flow-node .flow-image').src.includes('/media/') && !document.getElementById('flow-save').disabled);
   await admin.click('#flow-save');
-  await admin.waitForFunction(() => document.getElementById('flow-notice').textContent.includes('已保存为 v2'));
+  await admin.waitForFunction(() => document.getElementById('flow-notice').textContent.includes('已保存为 v3'));
   const untouched = await request(admin, `/api/accounts/${adminAccount.id}/flows`);
   assert.equal(untouched.data.nodes.length, 0, 'public save must not change the account flow');
 
@@ -70,9 +77,16 @@ try {
   assert.equal(registered.status, 201);
   await request(admin, `/api/admin/users/${registered.data.user.id}`, 'PATCH', { enabled: true, plan: 'basic', expiresAt: new Date(Date.now() + 86400000).toISOString() });
   await login(user, 'new-template-user', '123456');
+  await user.click('#nav-flows');
+  await user.waitForFunction(() => !document.getElementById('flow-example').disabled);
+  assert.equal(await user.$eval('#flow-save', element => element.disabled), true);
+  await user.click('#flow-example');
+  await user.waitForFunction(() => document.querySelector('.flow-node textarea')?.value === 'Updated greeting {full_name}');
+  await fill(user, '.flow-node textarea', 'Editable without an assigned number');
+  assert.equal(await user.$eval('#flow-save', element => element.disabled), true);
   const userAccount = legacyAccount(dir, registered.data.user.id, 'Existing user number');
   await openFlows(user);
-  assert.match(await user.$eval('#flow-template', element => element.selectedOptions[0].textContent), /示例1 · 已更新.*v2/);
+  assert.match(await user.$eval('#flow-template', element => element.selectedOptions[0].textContent), /示例1 · 已更新.*v3/);
   await user.click('#flow-example');
   await user.waitForFunction(() => document.querySelector('.flow-node textarea')?.value === 'Updated greeting {full_name}');
   assert.equal(await user.$eval('#template-editor', element => element.hidden), true);

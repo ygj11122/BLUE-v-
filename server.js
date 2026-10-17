@@ -168,6 +168,45 @@ function template(id) {
   return { id: row.id, name: row.name, config: JSON.parse(row.config), revision: row.revision };
 }
 app.get('/api/templates', (req, res) => res.json({ templates: store.db.prepare('SELECT id,name,revision FROM flow_templates ORDER BY rowid').all() }));
+app.post('/api/templates/:templateId/load', (req, res) => {
+  const item = template(req.params.templateId);
+  const config = validateFlows(item.config);
+  res.json(req.query.details === '1' ? { config: { ...config, enabled: false }, template: { id: item.id, name: item.name, revision: item.revision } } : { ...config, enabled: false });
+});
+app.get('/api/template-media/:asset', async (req, res) => {
+  if (!/^[a-f0-9]{32}\.(png|jpg|webp)$/.test(req.params.asset)) throw new AppError(404, '图片不存在');
+  try { await access(path.join(templateMedia, req.params.asset)); } catch { throw new AppError(404, '图片不存在'); }
+  res.sendFile(path.join(templateMedia, req.params.asset));
+});
+app.post('/api/admin/template-media', express.raw({ type: ['image/png', 'image/jpeg', 'image/webp'], limit: '5mb' }), async (req, res) => {
+  const data = req.body;
+  if (!Buffer.isBuffer(data) || data.length < 12) throw new AppError(400, '请选择 PNG、JPEG 或 WebP 图片（最大 5MB）');
+  const ext = data.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) ? 'png' : data[0] === 255 && data[1] === 216 && data[2] === 255 ? 'jpg' : data.toString('ascii', 0, 4) === 'RIFF' && data.toString('ascii', 8, 12) === 'WEBP' ? 'webp' : null;
+  if (!ext) throw new AppError(400, '图片格式无效');
+  await mkdir(templateMedia, { recursive: true, mode: 0o700 });
+  const id = `${randomBytes(16).toString('hex')}.${ext}`;
+  await writeFile(path.join(templateMedia, id), data, { mode: 0o600 }); res.json({ id });
+});
+app.post('/api/admin/templates', async (req, res) => {
+  const name = req.body?.name;
+  if (typeof name !== 'string' || !name.trim() || name.length > 80) throw new AppError(400, '示例名称需要 1–80 字');
+  let config;
+  try { config = validateFlows(req.body.config); } catch (error) { throw new AppError(400, error.message); }
+  const id = req.body.id || randomUUID();
+  const existing = req.body.id ? template(id) : null;
+  if (existing && req.body.revision !== undefined && req.body.revision !== existing.revision) throw new AppError(409, '示例已被其他页面更新，请重新载入最新版本后再保存');
+  if (!existing && store.db.prepare('SELECT count(*) AS n FROM flow_templates').get().n >= 100) throw new AppError(400, '最多 100 个示例');
+  for (const node of config.nodes) if (node.image) {
+    try { await access(path.join(templateMedia, node.image)); }
+    catch { throw new AppError(400, '公共示例图片不存在，请重新上传'); }
+  }
+  const serialized = JSON.stringify({ ...config, enabled: false });
+  if (existing) {
+    const updated = store.db.prepare('UPDATE flow_templates SET name=?,config=?,revision=revision+1 WHERE id=? AND revision=?').run(name.trim(), serialized, id, existing.revision);
+    if (!updated.changes) throw new AppError(409, '示例已被其他页面更新或删除，请重新载入后再保存');
+  } else store.db.prepare('INSERT INTO flow_templates(id,name,config) VALUES(?,?,?)').run(id, name.trim(), serialized);
+  res.json({ id, name: name.trim(), revision: existing ? existing.revision + 1 : 1 });
+});
 app.delete('/api/admin/templates/:templateId', (req, res) => {
   template(req.params.templateId);
   store.db.prepare('DELETE FROM flow_templates WHERE id=?').run(req.params.templateId);
