@@ -98,6 +98,10 @@
     el('template-update').disabled = unavailable || !editorTemplate;
     el('template-delete').disabled = unavailable || missing;
     el('flow-example').disabled = unavailable || missing;
+    el('template-export').disabled = unavailable || missing;
+    el('template-download').disabled = unavailable || missing;
+    el('template-import').disabled = unavailable || busy || (!admin && !base);
+    el('template-upload').disabled = unavailable || busy || (!admin && !base);
     el('template-use').disabled = unavailable || missing || !base;
     el('template-exit').hidden = !editorTemplate;
     el('template-editor').hidden = !editorTemplate;
@@ -148,6 +152,95 @@
   }
   el('template-new').onclick = () => saveTemplate(false);
   el('template-update').onclick = () => saveTemplate(true);
+  async function getTemplateExport() {
+    const selected = el('flow-template').value;
+    if (!selected || busy || !ready) throw new Error('请先选择示例');
+    const endpoint = base ? `${base}/templates/${encodeURIComponent(selected)}/export` : `/api/templates/${encodeURIComponent(selected)}/export`;
+    return window.workspaceApi(endpoint);
+  }
+  async function exportTemplate() {
+    try {
+      const payload = await getTemplateExport();
+      await navigator.clipboard.writeText(JSON.stringify(payload));
+      status(`示例「${payload.name}」及图片已复制，可粘贴到另一台服务器导入`);
+    } catch (error) { status(error.message || '无法访问剪贴板，请检查浏览器权限'); }
+  }
+  async function downloadTemplate() {
+    try {
+      const payload = await getTemplateExport();
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob), anchor = document.createElement('a');
+      anchor.href = url; anchor.download = `${payload.name.replace(/[\\/:*?"<>|]/g, '_')}.json`;
+      anchor.click(); URL.revokeObjectURL(url);
+      status(`示例「${payload.name}」已下载，可上传到另一台服务器导入`);
+    } catch (error) { status(error.message); }
+  }
+  async function importTemplate(payload) {
+    if (busy || !ready) return;
+    if (!payload || payload.format !== 'blue-v-flow-example' || payload.version !== 1 || typeof payload.name !== 'string' || !payload.name.trim() || payload.name.length > 80 || !Array.isArray(payload.media) || !payload.config || typeof payload.config !== 'object') throw new Error('示例码格式或版本无效');
+    if (payload.media.length > 50) throw new Error('示例图片数量无效');
+    let totalBytes = 0;
+    const assets = new Map();
+    for (const asset of payload.media) {
+      if (!asset || typeof asset.id !== 'string' || !/^[a-f0-9]{32}\.(png|jpg|webp)$/.test(asset.id) || !['image/png', 'image/jpeg', 'image/webp'].includes(asset.type) || typeof asset.data !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(asset.data) || assets.has(asset.id)) throw new Error('示例图片数据无效');
+      const bytes = Uint8Array.from(atob(asset.data), character => character.charCodeAt(0));
+      totalBytes += bytes.byteLength;
+      if (!bytes.length || bytes.length > 5 * 1024 * 1024 || totalBytes > 10 * 1024 * 1024) throw new Error('示例图片最大 5MB，图片总大小最大 10MB');
+      assets.set(asset.id, { type: asset.type, bytes });
+    }
+    if (!Array.isArray(payload.config.nodes) || payload.config.nodes.some(node => node?.image && !assets.has(node.image)) || payload.config.nodes.some(node => node?.image && !/^[a-f0-9]{32}\.(png|jpg|webp)$/.test(node.image))) throw new Error('示例配置引用了缺失或无效的图片');
+    const expectedType = id => id.endsWith('.png') ? 'image/png' : id.endsWith('.jpg') ? 'image/jpeg' : 'image/webp';
+    if (payload.config.nodes.some(node => node?.image && assets.get(node.image).type !== expectedType(node.image))) throw new Error('示例图片格式与文件名不匹配');
+    if (!window.isSuperAdmin() && !base) throw new Error('请选择一个号码后再导入示例');
+    const imported = await window.workspaceApi('/api/templates/validate', { method: 'POST', body: JSON.stringify({ ...payload.config, enabled: false }) });
+    if (imported.nodes.some(node => node.image && !assets.has(node.image))) throw new Error('示例配置引用了缺失或无效的图片');
+    if (imported.nodes.filter(node => node.image).some(node => !assets.has(node.image)) || assets.size !== new Set(imported.nodes.map(node => node.image).filter(Boolean)).size) throw new Error('示例码包含未引用的图片数据');
+    const importVersion = loadVersion;
+    const importBase = base;
+    busy = true; templateControls(); status('正在导入示例及图片…');
+    try {
+      const importedMedia = new Map();
+      for (const [oldId, asset] of assets) {
+        const mediaEndpoint = window.isSuperAdmin() ? '/api/admin/template-media' : `${importBase}/media`;
+        const response = await fetch(mediaEndpoint, { method: 'POST', headers: { 'Content-Type': asset.type }, body: asset.bytes });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error);
+        importedMedia.set(oldId, result.id);
+      }
+      if (importVersion !== loadVersion) return;
+      for (const node of imported.nodes) if (node.image) node.image = importedMedia.get(node.image);
+      imported.enabled = false;
+      if (window.isSuperAdmin()) {
+        const result = await window.workspaceApi('/api/admin/templates', { method: 'POST', body: JSON.stringify({ name: payload.name.trim(), config: imported }) });
+        const option = document.createElement('option'); option.value = result.id; option.textContent = `${result.name} · v${result.revision}`;
+        el('flow-template').append(option); el('flow-template').value = result.id;
+        status(`公共示例「${result.name}」已导入；可在示例列表中载入`);
+        await loadTemplates(importVersion);
+      } else {
+        config = imported; editorTemplate = null; draw();
+        status(`示例「${payload.name.trim()}」已导入到当前号码流程，请检查后点击「保存流程」`);
+      }
+    } finally {
+      if (importVersion === loadVersion) { busy = false; templateControls(); }
+    }
+  }
+  el('template-export').onclick = () => { void exportTemplate(); };
+  el('template-download').onclick = () => { void downloadTemplate(); };
+  el('template-import').onclick = async () => {
+    const text = prompt('粘贴从另一台服务器复制的示例码');
+    if (!text) return;
+    try { await importTemplate(JSON.parse(text)); }
+    catch (error) { status(error.message || '示例码无效'); }
+  };
+  el('template-upload').onclick = () => el('template-file').click();
+  el('template-file').onchange = async () => {
+    const file = el('template-file').files[0];
+    if (!file) return;
+    if (file.size > 15 * 1024 * 1024) { status('示例文件最大 15MB'); el('template-file').value = ''; return; }
+    try { await importTemplate(JSON.parse(await file.text())); }
+    catch (error) { status(error.message || '示例文件无效'); }
+    finally { el('template-file').value = ''; }
+  };
   el('template-delete').onclick = async () => {
     if (!base || busy || !ready || !confirm('删除所选示例？已载入的号码流程不受影响。')) return;
     const version = loadVersion, selected = el('flow-template').value;

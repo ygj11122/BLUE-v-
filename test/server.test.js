@@ -245,6 +245,7 @@ test('six-character passwords, admin password changes/reset and isolated media u
 test('flow examples can be edited without an assigned number', { timeout: 30000 }, async () => {
   const dataDir = await mkdtemp(path.join(tmpdir(), 'blue-no-number-flows-'));
   const service = await launch(dataDir);
+  let migrationDir, migrationService;
   try {
     const anonymous = client(service.base), admin = client(service.base), user = client(service.base);
     await admin.request('/api/auth/login', { method: 'POST', body: { username: 'test-admin', password: 'test-password-123' } });
@@ -272,7 +273,36 @@ test('flow examples can be edited without an assigned number', { timeout: 30000 
     assert.equal(reloaded.config.nodes[0].image, asset);
     assert.equal(reloaded.config.enabled, false);
     assert.equal(registered.status, 201);
-  } finally { await service.stop(); await rm(dataDir, { recursive: true }); }
+    assert.equal((await anonymous.request(`/api/templates/${templates[0].id}/export`)).status, 401);
+    const exported = await (await user.request(`/api/templates/${templates[0].id}/export`)).json();
+    assert.equal(exported.format, 'blue-v-flow-example');
+    assert.equal(exported.version, 1);
+    assert.equal(exported.name, 'No-number example');
+    assert.equal(exported.config.enabled, false);
+    assert.equal(exported.media.length, 1);
+    assert.deepEqual(Buffer.from(exported.media[0].data, 'base64'), image);
+
+    migrationDir = await mkdtemp(path.join(tmpdir(), 'blue-flow-import-'));
+    migrationService = await launch(migrationDir);
+    const newAdmin = client(migrationService.base);
+    await newAdmin.request('/api/auth/login', { method: 'POST', body: { username: 'test-admin', password: 'test-password-123' } });
+    assert.equal((await newAdmin.request('/api/templates/validate', { method: 'POST', body: { nodes: [] } })).status, 400);
+    const importedAsset = await newAdmin.request('/api/admin/template-media', { method: 'POST', headers: { 'Content-Type': exported.media[0].type }, body: Buffer.from(exported.media[0].data, 'base64') });
+    assert.equal(importedAsset.status, 200);
+    const importedConfig = structuredClone(exported.config);
+    importedConfig.nodes[0].image = (await importedAsset.json()).id;
+    const importedTemplate = await newAdmin.request('/api/admin/templates', { method: 'POST', body: { name: exported.name, config: importedConfig } });
+    assert.equal(importedTemplate.status, 200);
+    const importedId = (await importedTemplate.json()).id;
+    const importedDetails = await (await newAdmin.request(`/api/templates/${importedId}/load?details=1`, { method: 'POST' })).json();
+    assert.equal(importedDetails.config.nodes[0].image, importedConfig.nodes[0].image);
+    assert.deepEqual(Buffer.from(await (await newAdmin.request(`/api/template-media/${importedConfig.nodes[0].image}`)).arrayBuffer()), image);
+  } finally {
+    await service.stop();
+    if (migrationService) await migrationService.stop();
+    await rm(dataDir, { recursive: true });
+    if (migrationDir) await rm(migrationDir, { recursive: true });
+  }
 });
 
 test('admin-managed numbers transfer without exposing messages to admin; custom quotas include legacy numbers', { timeout: 30000 }, async () => {

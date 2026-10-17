@@ -167,7 +167,28 @@ function template(id) {
   if (!row) throw new AppError(404, '示例不存在');
   return { id: row.id, name: row.name, config: JSON.parse(row.config), revision: row.revision };
 }
+async function templateExport(id) {
+  const item = template(id), media = [];
+  let totalBytes = 0;
+  for (const node of item.config.nodes) if (node.image && !media.some(asset => asset.id === node.image)) {
+    if (!/^[a-f0-9]{32}\.(png|jpg|webp)$/.test(node.image)) throw new AppError(400, '示例图片引用无效');
+    let data;
+    try { data = await readFile(path.join(templateMedia, node.image)); }
+    catch (error) { if (error.code === 'ENOENT') throw new AppError(404, '示例图片缺失，无法导出'); throw error; }
+    totalBytes += data.length;
+    if (totalBytes > 10 * 1024 * 1024) throw new AppError(400, '示例图片总大小超过 10MB，无法生成复制码');
+    const type = node.image.endsWith('.png') ? 'image/png' : node.image.endsWith('.jpg') ? 'image/jpeg' : 'image/webp';
+    media.push({ id: node.image, type, data: data.toString('base64') });
+  }
+  return { format: 'blue-v-flow-example', version: 1, name: item.name, config: { ...validateFlows(item.config), enabled: false }, media };
+}
 app.get('/api/templates', (req, res) => res.json({ templates: store.db.prepare('SELECT id,name,revision FROM flow_templates ORDER BY rowid').all() }));
+app.get('/api/templates/:templateId/export', async (req, res) => res.json(await templateExport(req.params.templateId)));
+app.post('/api/templates/validate', (req, res) => {
+  let config;
+  try { config = validateFlows(req.body); } catch (error) { throw new AppError(400, error.message); }
+  res.json({ ...config, enabled: false });
+});
 app.post('/api/templates/:templateId/load', (req, res) => {
   const item = template(req.params.templateId);
   const config = validateFlows(item.config);
@@ -370,6 +391,7 @@ accountRouter.post('/templates/:templateId/load', async (req, res) => {
   const loaded = { ...config, enabled: false };
   res.json(req.query.details === '1' ? { config: loaded, template: { id: item.id, name: item.name, revision: item.revision } } : loaded);
 });
+accountRouter.get('/templates/:templateId/export', async (req, res) => res.json(await templateExport(req.params.templateId)));
 accountRouter.get('/flows', (req, res) => res.json(req.runtime.config));
 accountRouter.post('/flows', async (req, res) => {
   const rt = req.runtime;
