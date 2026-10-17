@@ -89,6 +89,7 @@ async function refreshAccounts(preferredId) {
 async function enter(user) {
   showAuth(); authEpoch++;
   me = user; updateMembership(user); $('auth-screen').hidden = true; $('workspace').hidden = false; $('password').value = ''; showPage('chat');
+  window.dispatchEvent(new Event('account-changed'));
   await refreshAccounts();
 }
 function switchAccount() {

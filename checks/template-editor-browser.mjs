@@ -49,8 +49,11 @@ try {
   const adminId = (await request(admin, '/api/auth/me')).data.user.id;
   await admin.click('#nav-flows');
   await admin.waitForFunction(() => !document.getElementById('flow-example').disabled);
+  assert.equal(await admin.$eval('#flow-notice', element => element.textContent.includes('已忽略切换账号前的请求结果')), false);
+  assert.equal(await admin.$eval('#flow-add', element => element.disabled), false, 'admin can edit a flow without a number after login');
   await admin.click('#flow-example');
   await admin.waitForFunction(() => !document.getElementById('template-editor').hidden && !document.getElementById('flow-save').disabled);
+  assert.equal(await admin.$eval('#template-name', element => element.disabled), false);
   await fill(admin, '#template-name', '示例1 · 无号码编辑');
   await admin.click('#flow-save');
   await admin.waitForFunction(() => document.getElementById('flow-notice').textContent.includes('已保存为 v2'));
